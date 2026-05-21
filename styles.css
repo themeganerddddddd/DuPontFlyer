@@ -100,6 +100,7 @@ button:hover,
   border: 0;
   height: 100%;
   inset: 0;
+  pointer-events: none;
   position: absolute;
   width: 100%;
 }
@@ -326,6 +327,33 @@ h2 {
 .marker-pin.is-complete {
   background: var(--green);
   font-size: 1.2rem;
+}
+
+.marker-pin::after {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 8px 18px rgba(23, 33, 29, 0.16);
+  color: var(--ink);
+  content: attr(data-label);
+  font-size: 0.72rem;
+  font-weight: 800;
+  left: 50%;
+  line-height: 1.2;
+  max-width: 150px;
+  opacity: 0;
+  padding: 6px 8px;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 7px);
+  transform: translateX(-50%);
+  transition: opacity 140ms ease;
+  width: max-content;
+}
+
+.marker-pin:hover::after,
+.marker-pin:focus-visible::after {
+  opacity: 1;
 }
 
 .popup-copy {

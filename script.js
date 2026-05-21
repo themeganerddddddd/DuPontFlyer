@@ -133,6 +133,7 @@ SPOTS.forEach((spot, index) => {
   marker.className = "marker-pin";
   marker.style.left = `${getMarkerPosition(spot).x}%`;
   marker.style.top = `${getMarkerPosition(spot).y}%`;
+  marker.dataset.label = spot.title;
   marker.setAttribute("aria-label", `Open ${spot.title}`);
   marker.addEventListener("click", () => openSpot(spot.id));
   markerLayer.append(marker);
@@ -356,13 +357,28 @@ function createMapView() {
 }
 
 function getMarkerPosition(spot) {
-  const x = ((spot.lng - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west)) * 100;
-  const y = ((MAP_BOUNDS.north - spot.lat) / (MAP_BOUNDS.north - MAP_BOUNDS.south)) * 100;
+  // Marker placement is derived from each spot's address coordinates.
+  // The embedded OpenStreetMap bbox uses the same north/south/east/west bounds.
+  const west = longitudeToWorldX(MAP_BOUNDS.west);
+  const east = longitudeToWorldX(MAP_BOUNDS.east);
+  const north = latitudeToWorldY(MAP_BOUNDS.north);
+  const south = latitudeToWorldY(MAP_BOUNDS.south);
+  const x = ((longitudeToWorldX(spot.lng) - west) / (east - west)) * 100;
+  const y = ((latitudeToWorldY(spot.lat) - north) / (south - north)) * 100;
 
   return {
     x: clamp(x, 3, 97),
     y: clamp(y, 3, 97)
   };
+}
+
+function longitudeToWorldX(longitude) {
+  return (longitude + 180) / 360;
+}
+
+function latitudeToWorldY(latitude) {
+  const radians = latitude * Math.PI / 180;
+  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
 }
 
 function clamp(value, min, max) {
