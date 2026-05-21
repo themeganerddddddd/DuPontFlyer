@@ -124,6 +124,8 @@ const manualResetButton = document.querySelector("#manual-reset");
 const exportButton = document.querySelector("#export-data");
 const importInput = document.querySelector("#import-data");
 const template = document.querySelector("#spot-item-template");
+const sidePanel = document.querySelector(".side-panel");
+const panelToggle = document.querySelector("#panel-toggle");
 
 SPOTS.forEach((spot, index) => {
   const marker = createMarkerElement(spot, index);
@@ -200,6 +202,12 @@ clearSpotButton.addEventListener("click", () => {
 
 closeDialogButton.addEventListener("click", () => {
   dialog.close();
+});
+
+panelToggle.addEventListener("click", () => {
+  const isCollapsed = sidePanel.classList.toggle("is-collapsed");
+  panelToggle.setAttribute("aria-expanded", String(!isCollapsed));
+  panelToggle.querySelector(".panel-toggle-text").textContent = isCollapsed ? "Show list" : "Hide list";
 });
 
 manualResetButton.addEventListener("click", () => {
@@ -339,10 +347,12 @@ function createCoordinateMap(container, options) {
   const status = document.createElement("div");
   const attribution = document.createElement("div");
   const markersOnMap = [];
+  const activePointers = new Map();
   let center = { ...options.center };
   let zoom = options.zoom;
   let isDragging = false;
   let dragStart = null;
+  let pinchStart = null;
 
   tilePane.className = "tile-pane";
   markerLayer.className = "map-marker-layer";
@@ -368,16 +378,36 @@ function createCoordinateMap(container, options) {
 
   container.addEventListener("pointerdown", (event) => {
     if (event.target.closest("button")) return;
-    isDragging = true;
-    dragStart = {
-      x: event.clientX,
-      y: event.clientY,
-      centerPixel: latLngToPixel(center.lat, center.lng, zoom)
-    };
+    activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     container.setPointerCapture(event.pointerId);
+
+    if (activePointers.size === 1) {
+      isDragging = true;
+      pinchStart = null;
+      dragStart = {
+        x: event.clientX,
+        y: event.clientY,
+        centerPixel: latLngToPixel(center.lat, center.lng, zoom)
+      };
+      return;
+    }
+
+    if (activePointers.size === 2) {
+      isDragging = false;
+      dragStart = null;
+      pinchStart = createPinchState();
+    }
   });
 
   container.addEventListener("pointermove", (event) => {
+    if (!activePointers.has(event.pointerId)) return;
+    activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (activePointers.size === 2 && pinchStart) {
+      updatePinchZoom();
+      return;
+    }
+
     if (!isDragging || !dragStart) return;
     const nextCenterPixel = {
       x: dragStart.centerPixel.x - (event.clientX - dragStart.x),
@@ -388,11 +418,31 @@ function createCoordinateMap(container, options) {
   });
 
   container.addEventListener("pointerup", (event) => {
-    isDragging = false;
-    dragStart = null;
+    activePointers.delete(event.pointerId);
+    pinchStart = null;
+    isDragging = activePointers.size === 1;
+
+    if (isDragging) {
+      const point = [...activePointers.values()][0];
+      dragStart = {
+        x: point.x,
+        y: point.y,
+        centerPixel: latLngToPixel(center.lat, center.lng, zoom)
+      };
+    } else {
+      dragStart = null;
+    }
+
     if (container.hasPointerCapture(event.pointerId)) {
       container.releasePointerCapture(event.pointerId);
     }
+  });
+
+  container.addEventListener("pointercancel", (event) => {
+    activePointers.delete(event.pointerId);
+    isDragging = false;
+    dragStart = null;
+    pinchStart = null;
   });
 
   container.addEventListener("wheel", (event) => {
@@ -468,7 +518,55 @@ function createCoordinateMap(container, options) {
     });
   }
 
+  function createPinchState() {
+    const points = [...activePointers.values()];
+    const midpoint = getMidpoint(points[0], points[1]);
+    const centerPixel = latLngToPixel(center.lat, center.lng, zoom);
+    const mapRect = container.getBoundingClientRect();
+    return {
+      distance: getDistance(points[0], points[1]),
+      midpoint,
+      zoom,
+      centerPixel,
+      anchorPixel: {
+        x: centerPixel.x + midpoint.x - mapRect.left - container.clientWidth / 2,
+        y: centerPixel.y + midpoint.y - mapRect.top - container.clientHeight / 2
+      }
+    };
+  }
+
+  function updatePinchZoom() {
+    const points = [...activePointers.values()];
+    const distance = getDistance(points[0], points[1]);
+    if (!pinchStart || !distance || !pinchStart.distance) return;
+
+    const zoomDelta = Math.round(Math.log2(distance / pinchStart.distance));
+    const nextZoom = Math.max(options.minZoom, Math.min(options.maxZoom, pinchStart.zoom + zoomDelta));
+    const scale = 2 ** (nextZoom - pinchStart.zoom);
+    const midpoint = getMidpoint(points[0], points[1]);
+    const mapRect = container.getBoundingClientRect();
+    const nextCenterPixel = {
+      x: pinchStart.anchorPixel.x * scale - (midpoint.x - mapRect.left - container.clientWidth / 2),
+      y: pinchStart.anchorPixel.y * scale - (midpoint.y - mapRect.top - container.clientHeight / 2)
+    };
+
+    zoom = nextZoom;
+    center = pixelToLatLng(nextCenterPixel.x, nextCenterPixel.y, zoom);
+    render();
+  }
+
   return { addMarker, fitSpots, render, setView };
+}
+
+function getDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getMidpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
+  };
 }
 
 function latLngToPixel(lat, lng, zoom) {
