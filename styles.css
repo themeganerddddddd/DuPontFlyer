@@ -19,7 +19,7 @@
 
 html {
   height: 100%;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 body {
@@ -71,9 +71,44 @@ button:hover,
 }
 
 #map {
+  background:
+    linear-gradient(26deg, transparent 47%, rgba(36, 119, 87, 0.18) 48%, rgba(36, 119, 87, 0.18) 52%, transparent 53%),
+    linear-gradient(100deg, transparent 47%, rgba(217, 156, 43, 0.22) 48%, rgba(217, 156, 43, 0.22) 52%, transparent 53%),
+    linear-gradient(158deg, transparent 47%, rgba(100, 113, 108, 0.18) 48%, rgba(100, 113, 108, 0.18) 52%, transparent 53%),
+    #edf3ef;
   height: 100%;
   min-width: 0;
+  overflow: hidden;
+  position: relative;
   width: 100%;
+}
+
+.map-fallback-label {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 800;
+  left: 18px;
+  padding: 10px 12px;
+  position: absolute;
+  top: 18px;
+  z-index: 1;
+}
+
+.map-frame {
+  border: 0;
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.marker-layer {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
 }
 
 .side-panel {
@@ -275,21 +310,22 @@ h2 {
   border-radius: 999px;
   box-shadow: 0 8px 18px rgba(23, 33, 29, 0.25);
   color: #fff;
+  cursor: pointer;
   display: flex;
   font-weight: 900;
   height: 34px;
   justify-content: center;
   line-height: 1;
+  pointer-events: auto;
+  position: absolute;
+  transform: translate(-50%, -50%);
   width: 34px;
+  z-index: 3;
 }
 
 .marker-pin.is-complete {
   background: var(--green);
   font-size: 1.2rem;
-}
-
-.leaflet-popup-content-wrapper {
-  border-radius: 8px;
 }
 
 .popup-copy {
@@ -433,32 +469,24 @@ dd {
 }
 
 @media (max-width: 880px) {
-  body {
-    height: auto;
-    min-height: 100%;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
   .app-shell {
+    grid-template-rows: minmax(280px, 46svh) minmax(0, 1fr);
     grid-template-columns: 1fr;
-    height: auto;
-    min-height: 100vh;
-    min-height: 100svh;
-    overflow: visible;
+    height: 100vh;
+    height: 100svh;
+    overflow: hidden;
   }
 
   .map-panel,
   #map {
-    height: auto;
-    min-height: 54vh;
-    min-height: 54svh;
+    height: 100%;
+    min-height: 0;
   }
 
   .side-panel {
     border-left: 0;
     border-top: 1px solid var(--line);
-    height: auto;
+    height: 100%;
     max-height: none;
   }
 }
@@ -466,22 +494,6 @@ dd {
 @media (max-width: 520px) {
   body {
     background: var(--panel);
-  }
-
-  .map-panel,
-  #map {
-    min-height: 48vh;
-    min-height: 48svh;
-  }
-
-  .leaflet-control-zoom a {
-    height: 38px;
-    line-height: 38px;
-    width: 38px;
-  }
-
-  .leaflet-popup-content {
-    margin: 12px 14px;
   }
 
   .popup-copy {

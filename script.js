@@ -93,46 +93,12 @@ const state = {
 const markers = new Map();
 let activeSpotId = null;
 
-const map = L.map("map", {
-  zoomControl: false
-}).setView([38.91095, -77.04055], 16);
-
-L.control.zoom({
-  position: "bottomright"
-}).addTo(map);
-
-const tileLayers = {
-  standard: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-    subdomains: ["a", "b", "c"]
-  }),
-  light: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 20,
-    subdomains: ["a", "b", "c", "d"]
-  })
+const MAP_BOUNDS = {
+  west: -77.0472,
+  south: 38.9069,
+  east: -77.0338,
+  north: 38.9164
 };
-
-let activeTileLayer = tileLayers.standard;
-let tileErrorCount = 0;
-activeTileLayer.addTo(map);
-
-activeTileLayer.on("tileerror", () => {
-  tileErrorCount += 1;
-  if (tileErrorCount < 4 || activeTileLayer === tileLayers.light) return;
-
-  map.removeLayer(activeTileLayer);
-  activeTileLayer = tileLayers.light;
-  activeTileLayer.addTo(map);
-});
-
-const bounds = L.latLngBounds(SPOTS.map((spot) => [spot.lat, spot.lng]));
-map.fitBounds(bounds.pad(0.22));
-refreshMapLayout();
-window.addEventListener("resize", refreshMapLayout);
-window.addEventListener("orientationchange", refreshMapLayout);
-window.addEventListener("pageshow", refreshMapLayout);
 
 const spotList = document.querySelector("#spot-list");
 const completedCount = document.querySelector("#completed-count");
@@ -158,13 +124,18 @@ const manualResetButton = document.querySelector("#manual-reset");
 const exportButton = document.querySelector("#export-data");
 const importInput = document.querySelector("#import-data");
 const template = document.querySelector("#spot-item-template");
+const mapElement = document.querySelector("#map");
+const markerLayer = createMapView();
 
 SPOTS.forEach((spot, index) => {
-  const marker = L.marker([spot.lat, spot.lng], {
-    icon: createMarkerIcon(spot, index)
-  }).addTo(map);
-
-  marker.on("click", () => openSpot(spot.id));
+  const marker = document.createElement("button");
+  marker.type = "button";
+  marker.className = "marker-pin";
+  marker.style.left = `${getMarkerPosition(spot).x}%`;
+  marker.style.top = `${getMarkerPosition(spot).y}%`;
+  marker.setAttribute("aria-label", `Open ${spot.title}`);
+  marker.addEventListener("click", () => openSpot(spot.id));
+  markerLayer.append(marker);
   markers.set(spot.id, marker);
 
   const node = template.content.cloneNode(true);
@@ -176,8 +147,7 @@ SPOTS.forEach((spot, index) => {
   button.dataset.spotId = spot.id;
   button.addEventListener("click", () => {
     openSpot(spot.id);
-    refreshMapLayout();
-    map.flyTo([spot.lat, spot.lng], 18, { duration: 0.5 });
+    marker.focus({ preventScroll: true });
   });
   status.dataset.number = String(index + 1);
   title.textContent = spot.title;
@@ -335,8 +305,11 @@ function render() {
     const entry = getEntryForSpot(spot.id);
     const marker = markers.get(spot.id);
     if (marker) {
-      marker.setIcon(createMarkerIcon(spot, index));
-      marker.bindPopup(createPopup(spot, entry));
+      marker.classList.toggle("is-complete", Boolean(entry));
+      marker.textContent = entry ? "\u2713" : String(index + 1);
+      marker.title = entry
+        ? `${spot.title} - marked by ${entry.name}`
+        : spot.title;
     }
   });
 
@@ -362,14 +335,38 @@ function getEntryForSpot(spotId) {
   return entry;
 }
 
-function refreshMapLayout() {
-  requestAnimationFrame(() => {
-    map.invalidateSize();
-  });
+function createMapView() {
+  const iframe = document.createElement("iframe");
+  const markerLayerElement = document.createElement("div");
+  const fallbackLabel = document.createElement("div");
+  const bbox = `${MAP_BOUNDS.west},${MAP_BOUNDS.south},${MAP_BOUNDS.east},${MAP_BOUNDS.north}`;
 
-  window.setTimeout(() => {
-    map.invalidateSize();
-  }, 250);
+  fallbackLabel.className = "map-fallback-label";
+  fallbackLabel.textContent = "Dupont Circle priority map";
+
+  iframe.className = "map-frame";
+  iframe.title = "OpenStreetMap view of Dupont Circle";
+  iframe.loading = "eager";
+  iframe.referrerPolicy = "no-referrer-when-downgrade";
+  iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik`;
+
+  markerLayerElement.className = "marker-layer";
+  mapElement.append(fallbackLabel, iframe, markerLayerElement);
+  return markerLayerElement;
+}
+
+function getMarkerPosition(spot) {
+  const x = ((spot.lng - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west)) * 100;
+  const y = ((MAP_BOUNDS.north - spot.lat) / (MAP_BOUNDS.north - MAP_BOUNDS.south)) * 100;
+
+  return {
+    x: clamp(x, 3, 97),
+    y: clamp(y, 3, 97)
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 async function initializeApp() {
@@ -557,31 +554,6 @@ function getTableName() {
 
 function getBucketName() {
   return backendConfig.bucketName || "flyer-photos";
-}
-
-function createMarkerIcon(spot, index) {
-  const complete = Boolean(getEntryForSpot(spot.id));
-  return L.divIcon({
-    className: "",
-    html: `<span class="marker-pin ${complete ? "is-complete" : ""}">${complete ? "&#10003;" : index + 1}</span>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -18]
-  });
-}
-
-function createPopup(spot, entry) {
-  if (!entry) {
-    return `<div class="popup-copy"><strong>${escapeHtml(spot.title)}</strong><span>${escapeHtml(spot.address)}</span></div>`;
-  }
-
-  return `
-    <div class="popup-copy">
-      <strong>${escapeHtml(spot.title)}</strong>
-      <span>Marked by ${escapeHtml(entry.name)}</span>
-      <span>${escapeHtml(formatDate(entry.completedAt))}</span>
-    </div>
-  `;
 }
 
 function loadLocalState() {
