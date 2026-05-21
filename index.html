@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dupont Flyer Priority Map</title>
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="preconnect" href="https://tile.openstreetmap.org">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQpNH9wuhFl2uZ7K3ex03q+xkD1s3Tw="
+      crossorigin=""
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="map-panel" aria-label="Dupont Circle flyer map">
+        <div id="map"></div>
+      </section>
+
+      <aside class="side-panel" aria-label="Flyer priority spots">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Local happy hour</p>
+            <h1>Dupont flyer spots</h1>
+          </div>
+          <div class="progress-ring" aria-live="polite">
+            <strong id="completed-count">0</strong>
+            <span>/ 11</span>
+          </div>
+        </header>
+
+        <div class="meter" aria-hidden="true">
+          <span id="meter-fill"></span>
+        </div>
+
+        <div class="reset-note">
+          <span id="reset-copy"></span>
+          <button id="manual-reset" type="button">Reset now</button>
+        </div>
+
+        <div class="utility-row">
+          <button id="export-data" type="button">Export</button>
+          <label class="import-button" for="import-data">Import</label>
+          <input id="import-data" type="file" accept="application/json">
+        </div>
+
+        <ol id="spot-list" class="spot-list"></ol>
+      </aside>
+    </main>
+
+    <dialog id="spot-dialog">
+      <form id="spot-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <p id="dialog-address" class="eyebrow"></p>
+            <h2 id="dialog-title"></h2>
+          </div>
+          <button id="close-dialog" class="icon-button" aria-label="Close dialog" type="button">&times;</button>
+        </div>
+
+        <div id="existing-entry" class="existing-entry" hidden>
+          <img id="entry-image" alt="">
+          <dl>
+            <div>
+              <dt>Marked by</dt>
+              <dd id="entry-name"></dd>
+            </div>
+            <div>
+              <dt>When</dt>
+              <dd id="entry-time"></dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd id="entry-description"></dd>
+            </div>
+          </dl>
+        </div>
+
+        <div id="entry-fields" class="entry-fields">
+          <label>
+            Name
+            <input id="name-input" name="name" autocomplete="name" required>
+          </label>
+
+          <label>
+            Photo
+            <input id="image-input" name="image" type="file" accept="image/*" required>
+          </label>
+
+          <label>
+            Description
+            <textarea id="description-input" name="description" rows="4" required></textarea>
+          </label>
+        </div>
+
+        <menu class="dialog-actions">
+          <button id="clear-spot" class="secondary" type="button">Clear this spot</button>
+          <button id="save-spot" type="submit">Mark complete</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <template id="spot-item-template">
+      <li>
+        <button type="button" class="spot-item">
+          <span class="spot-status" aria-hidden="true"></span>
+          <span class="spot-copy">
+            <strong></strong>
+            <small></small>
+          </span>
+        </button>
+      </li>
+    </template>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="script.js"></script>
+  </body>
+</html>
