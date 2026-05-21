@@ -10,7 +10,30 @@ A simple static GitHub Pages site for tracking flyer coverage around Dupont Circ
 - Completed spots change from numbered markers to check marks.
 - Completed entries show the volunteer name, image, description, and timestamp.
 - Entries automatically reset after the second Monday of the month ends, at Tuesday 12:00 AM in the visitor's local browser time.
-- Export and import buttons let you move the current browser's entries between devices.
+- When Supabase is configured, entries are shared for everyone using the site.
+- Without Supabase, export and import buttons let you move the current browser's entries between devices.
+
+## Free shared backend setup
+
+This site is wired for Supabase's free hosted backend.
+
+1. Create a free project at `https://supabase.com`.
+2. In Supabase, open the SQL editor.
+3. Paste and run the contents of `supabase-setup.sql`.
+4. Open Project Settings -> API.
+5. Copy the Project URL and anon public key.
+6. Paste them into `config.js`:
+
+```js
+window.FLYER_BACKEND_CONFIG = {
+  supabaseUrl: "https://YOUR_PROJECT.supabase.co",
+  supabaseAnonKey: "YOUR_ANON_PUBLIC_KEY",
+  tableName: "flyer_entries",
+  bucketName: "flyer-photos"
+};
+```
+
+After that, uploads and marker updates are shared across visitors. The anon key is designed to be public in browser apps, but this setup intentionally lets anyone with the site link add, update, or clear flyer entries.
 
 ## GitHub Pages
 
@@ -21,6 +44,6 @@ A simple static GitHub Pages site for tracking flyer coverage around Dupont Circ
 
 ## Important storage note
 
-This version is intentionally simple and static. The data is stored in each visitor's browser with `localStorage`, so it persists on that device until the weekly reset but is not automatically shared across everyone.
+If `config.js` is blank, the app uses `localStorage`, so data stays on that device only. If `config.js` has Supabase credentials, the app saves to Supabase and everyone sees the same data for the current monthly cycle.
 
-For a shared team-wide tracker, add a small backend such as Supabase, Firebase, or a serverless function with file storage. The map UI can stay the same; only the `loadState` and `saveState` parts of `script.js` need to be swapped for backend calls.
+The monthly reset works by starting a new cycle after the second Monday ends. Older Supabase rows and photos remain stored unless you delete them from Supabase.

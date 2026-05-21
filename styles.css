@@ -177,6 +177,13 @@ h2 {
   margin-top: 14px;
 }
 
+.storage-note {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  margin: 10px 0 0;
+}
+
 #import-data {
   display: none;
 }

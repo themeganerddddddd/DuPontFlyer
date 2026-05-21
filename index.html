@@ -46,6 +46,7 @@
           <label class="import-button" for="import-data">Import</label>
           <input id="import-data" type="file" accept="application/json">
         </div>
+        <p class="storage-note">Saved on this device only unless a shared backend is added.</p>
 
         <ol id="spot-list" class="spot-list"></ol>
       </aside>
@@ -120,6 +121,8 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="config.js"></script>
     <script src="script.js"></script>
   </body>
 </html>

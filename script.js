@@ -81,7 +81,14 @@ const SPOTS = [
 const STORAGE_KEY = "dupont-flyer-priority-map";
 const RESET_HOUR = 0;
 const RESET_DAY = 2;
-const state = loadState();
+const backendConfig = window.FLYER_BACKEND_CONFIG || {};
+const supabaseClient = createSupabaseClient();
+const state = {
+  cycleKey: getCycleKey(new Date()),
+  entries: {},
+  storageMode: supabaseClient ? "shared" : "local",
+  isLoading: true
+};
 const markers = new Map();
 let activeSpotId = null;
 
@@ -93,18 +100,44 @@ L.control.zoom({
   position: "bottomright"
 }).addTo(map);
 
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom: 19
-}).addTo(map);
+const tileLayers = {
+  standard: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+    subdomains: ["a", "b", "c"]
+  }),
+  light: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 20,
+    subdomains: ["a", "b", "c", "d"]
+  })
+};
+
+let activeTileLayer = tileLayers.standard;
+let tileErrorCount = 0;
+activeTileLayer.addTo(map);
+
+activeTileLayer.on("tileerror", () => {
+  tileErrorCount += 1;
+  if (tileErrorCount < 4 || activeTileLayer === tileLayers.light) return;
+
+  map.removeLayer(activeTileLayer);
+  activeTileLayer = tileLayers.light;
+  activeTileLayer.addTo(map);
+});
 
 const bounds = L.latLngBounds(SPOTS.map((spot) => [spot.lat, spot.lng]));
 map.fitBounds(bounds.pad(0.22));
+refreshMapLayout();
+window.addEventListener("resize", refreshMapLayout);
+window.addEventListener("orientationchange", refreshMapLayout);
+window.addEventListener("pageshow", refreshMapLayout);
 
 const spotList = document.querySelector("#spot-list");
 const completedCount = document.querySelector("#completed-count");
 const meterFill = document.querySelector("#meter-fill");
 const resetCopy = document.querySelector("#reset-copy");
+const storageNote = document.querySelector(".storage-note");
 const dialog = document.querySelector("#spot-dialog");
 const form = document.querySelector("#spot-form");
 const dialogTitle = document.querySelector("#dialog-title");
@@ -142,6 +175,7 @@ SPOTS.forEach((spot, index) => {
   button.dataset.spotId = spot.id;
   button.addEventListener("click", () => {
     openSpot(spot.id);
+    refreshMapLayout();
     map.flyTo([spot.lat, spot.lng], 18, { duration: 0.5 });
   });
   status.dataset.number = String(index + 1);
@@ -164,27 +198,33 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  const image = file ? await resizeImage(file) : existing.image;
+  setFormSaving(true);
 
-  state.entries[spot.id] = {
-    name: nameInput.value.trim(),
-    description: descriptionInput.value.trim(),
-    image,
-    completedAt: existing?.completedAt || new Date().toISOString()
-  };
-
-  saveState();
-  render();
-  dialog.close();
+  try {
+    await saveEntry(spot, {
+      name: nameInput.value.trim(),
+      description: descriptionInput.value.trim(),
+      file,
+      existing
+    });
+    render();
+    dialog.close();
+  } catch (error) {
+    window.alert(error.message || "This spot could not be saved.");
+  } finally {
+    setFormSaving(false);
+  }
 });
 
 clearSpotButton.addEventListener("click", () => {
   const spot = getActiveSpot();
   if (!spot) return;
-  delete state.entries[spot.id];
-  saveState();
-  render();
-  openSpot(spot.id);
+  clearEntry(spot).then(() => {
+    render();
+    openSpot(spot.id);
+  }).catch((error) => {
+    window.alert(error.message || "This spot could not be cleared.");
+  });
 });
 
 closeDialogButton.addEventListener("click", () => {
@@ -192,11 +232,13 @@ closeDialogButton.addEventListener("click", () => {
 });
 
 manualResetButton.addEventListener("click", () => {
-  if (!window.confirm("Clear all marked flyer spots for this browser?")) return;
-  state.entries = {};
-  state.cycleKey = getCycleKey(new Date());
-  saveState();
-  render();
+  const target = state.storageMode === "shared" ? "everyone" : "this browser";
+  if (!window.confirm(`Clear all marked flyer spots for ${target}?`)) return;
+  clearCurrentCycle().then(() => {
+    render();
+  }).catch((error) => {
+    window.alert(error.message || "The flyer spots could not be reset.");
+  });
 });
 
 exportButton.addEventListener("click", () => {
@@ -220,9 +262,13 @@ importInput.addEventListener("change", async () => {
 
   try {
     const imported = JSON.parse(await file.text());
+    if (state.storageMode === "shared") {
+      window.alert("Import is only for local backup files. Shared mode loads from Supabase automatically.");
+      return;
+    }
     state.entries = imported.entries || {};
     state.cycleKey = imported.cycleKey || getCycleKey(new Date());
-    saveState();
+    saveLocalState();
     render();
   } catch {
     window.alert("That file could not be imported.");
@@ -231,7 +277,7 @@ importInput.addEventListener("change", async () => {
   }
 });
 
-render();
+initializeApp();
 
 function openSpot(id) {
   const spot = SPOTS.find((item) => item.id === id);
@@ -275,6 +321,9 @@ function render() {
   completedCount.textContent = String(completed);
   meterFill.style.width = `${Math.round((completed / SPOTS.length) * 100)}%`;
   resetCopy.textContent = `Auto-resets after the second Monday ends. Next reset: ${formatDate(getNextResetDate())}.`;
+  storageNote.textContent = state.storageMode === "shared"
+    ? "Shared backend active. Updates are visible to everyone using the site."
+    : "Saved on this device only until Supabase is configured.";
 
   SPOTS.forEach((spot, index) => {
     const entry = state.entries[spot.id];
@@ -291,9 +340,196 @@ function render() {
     const subtitle = button.querySelector("small");
     button.classList.toggle("is-complete", Boolean(entry));
     subtitle.textContent = entry
-      ? `${entry.name} · ${formatDate(entry.completedAt)}`
+      ? `${entry.name} - ${formatDate(entry.completedAt)}`
       : spot.address;
   });
+}
+
+function refreshMapLayout() {
+  requestAnimationFrame(() => {
+    map.invalidateSize();
+  });
+
+  window.setTimeout(() => {
+    map.invalidateSize();
+  }, 250);
+}
+
+async function initializeApp() {
+  try {
+    state.entries = await loadEntries();
+  } catch (error) {
+    console.warn(error);
+    state.storageMode = "local";
+    state.entries = loadLocalState().entries;
+    window.alert("The shared backend could not be reached, so this session is using local browser storage.");
+  } finally {
+    state.isLoading = false;
+    render();
+  }
+}
+
+function createSupabaseClient() {
+  const hasConfig = backendConfig.supabaseUrl && backendConfig.supabaseAnonKey;
+  if (!hasConfig || !window.supabase) return null;
+
+  return window.supabase.createClient(
+    backendConfig.supabaseUrl,
+    backendConfig.supabaseAnonKey
+  );
+}
+
+async function loadEntries() {
+  if (!supabaseClient) {
+    return loadLocalState().entries;
+  }
+
+  const { data, error } = await supabaseClient
+    .from(getTableName())
+    .select("spot_id, name, description, image_url, image_path, completed_at")
+    .eq("cycle_key", state.cycleKey);
+
+  if (error) throw error;
+
+  return (data || []).reduce((entries, row) => {
+    entries[row.spot_id] = {
+      name: row.name,
+      description: row.description,
+      image: row.image_url,
+      imagePath: row.image_path,
+      completedAt: row.completed_at
+    };
+    return entries;
+  }, {});
+}
+
+async function saveEntry(spot, entry) {
+  if (!supabaseClient) {
+    const image = entry.file ? await resizeImage(entry.file) : entry.existing.image;
+    state.entries[spot.id] = {
+      name: entry.name,
+      description: entry.description,
+      image,
+      completedAt: entry.existing?.completedAt || new Date().toISOString()
+    };
+    saveLocalState();
+    return;
+  }
+
+  const completedAt = entry.existing?.completedAt || new Date().toISOString();
+  const imageUpload = entry.file
+    ? await uploadSharedImage(spot, entry.file)
+    : {
+        imageUrl: entry.existing.image,
+        imagePath: entry.existing.imagePath
+      };
+
+  const row = {
+    spot_id: spot.id,
+    cycle_key: state.cycleKey,
+    name: entry.name,
+    description: entry.description,
+    image_url: imageUpload.imageUrl,
+    image_path: imageUpload.imagePath,
+    completed_at: completedAt,
+    updated_at: new Date().toISOString()
+  };
+
+  const { error } = await supabaseClient
+    .from(getTableName())
+    .upsert(row, { onConflict: "spot_id,cycle_key" });
+
+  if (error) throw error;
+
+  state.entries[spot.id] = {
+    name: row.name,
+    description: row.description,
+    image: row.image_url,
+    imagePath: row.image_path,
+    completedAt: row.completed_at
+  };
+}
+
+async function uploadSharedImage(spot, file) {
+  const imageFile = await resizeImageToFile(file);
+  const safeFileName = imageFile.name.replace(/[^a-z0-9.-]/gi, "-").toLowerCase();
+  const imagePath = `${state.cycleKey}/${spot.id}-${Date.now()}-${safeFileName}`;
+
+  const { error } = await supabaseClient
+    .storage
+    .from(getBucketName())
+    .upload(imagePath, imageFile, {
+      cacheControl: "3600",
+      upsert: true
+    });
+
+  if (error) throw error;
+
+  const { data } = supabaseClient
+    .storage
+    .from(getBucketName())
+    .getPublicUrl(imagePath);
+
+  return {
+    imageUrl: data.publicUrl,
+    imagePath
+  };
+}
+
+async function clearEntry(spot) {
+  if (!supabaseClient) {
+    delete state.entries[spot.id];
+    saveLocalState();
+    return;
+  }
+
+  const { error } = await supabaseClient
+    .from(getTableName())
+    .delete()
+    .eq("cycle_key", state.cycleKey)
+    .eq("spot_id", spot.id);
+
+  if (error) throw error;
+  delete state.entries[spot.id];
+}
+
+async function clearCurrentCycle() {
+  if (!supabaseClient) {
+    state.entries = {};
+    state.cycleKey = getCycleKey(new Date());
+    saveLocalState();
+    return;
+  }
+
+  const { error } = await supabaseClient
+    .from(getTableName())
+    .delete()
+    .eq("cycle_key", state.cycleKey);
+
+  if (error) throw error;
+  state.entries = {};
+}
+
+function setFormSaving(isSaving) {
+  const saveButton = document.querySelector("#save-spot");
+  saveButton.disabled = isSaving;
+  clearSpotButton.disabled = isSaving;
+
+  if (isSaving) {
+    saveButton.dataset.previousText = saveButton.textContent;
+    saveButton.textContent = "Saving...";
+    return;
+  }
+
+  saveButton.textContent = saveButton.dataset.previousText || "Mark complete";
+}
+
+function getTableName() {
+  return backendConfig.tableName || "flyer_entries";
+}
+
+function getBucketName() {
+  return backendConfig.bucketName || "flyer-photos";
 }
 
 function createMarkerIcon(spot, index) {
@@ -321,7 +557,7 @@ function createPopup(spot, entry) {
   `;
 }
 
-function loadState() {
+function loadLocalState() {
   const cycleKey = getCycleKey(new Date());
   const fallback = { cycleKey, entries: {} };
 
@@ -337,7 +573,7 @@ function loadState() {
   }
 }
 
-function saveState() {
+function saveLocalState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -398,6 +634,14 @@ function resizeImage(file) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+async function resizeImageToFile(file) {
+  const dataUrl = await resizeImage(file);
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "flyer-photo";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
 }
 
 function escapeHtml(value) {
