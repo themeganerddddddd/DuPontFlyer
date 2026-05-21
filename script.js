@@ -83,6 +83,7 @@ const RESET_HOUR = 0;
 const RESET_DAY = 2;
 const backendConfig = window.FLYER_BACKEND_CONFIG || {};
 const supabaseClient = createSupabaseClient();
+const spotIds = new Set(SPOTS.map((spot) => spot.id));
 const state = {
   cycleKey: getCycleKey(new Date()),
   entries: {},
@@ -190,7 +191,7 @@ form.addEventListener("submit", async (event) => {
   const spot = getActiveSpot();
   if (!spot) return;
 
-  const existing = state.entries[spot.id];
+  const existing = getEntryForSpot(spot.id);
   const file = imageInput.files[0];
 
   if (!existing && !file) {
@@ -207,6 +208,7 @@ form.addEventListener("submit", async (event) => {
       file,
       existing
     });
+    await refreshEntriesFromBackend();
     render();
     dialog.close();
   } catch (error) {
@@ -220,6 +222,8 @@ clearSpotButton.addEventListener("click", () => {
   const spot = getActiveSpot();
   if (!spot) return;
   clearEntry(spot).then(() => {
+    return refreshEntriesFromBackend();
+  }).then(() => {
     render();
     openSpot(spot.id);
   }).catch((error) => {
@@ -235,6 +239,8 @@ manualResetButton.addEventListener("click", () => {
   const target = state.storageMode === "shared" ? "everyone" : "this browser";
   if (!window.confirm(`Clear all marked flyer spots for ${target}?`)) return;
   clearCurrentCycle().then(() => {
+    return refreshEntriesFromBackend();
+  }).then(() => {
     render();
   }).catch((error) => {
     window.alert(error.message || "The flyer spots could not be reset.");
@@ -245,7 +251,7 @@ exportButton.addEventListener("click", () => {
   const payload = {
     exportedAt: new Date().toISOString(),
     cycleKey: state.cycleKey,
-    entries: state.entries
+    entries: normalizeEntries(state.entries)
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -284,7 +290,7 @@ function openSpot(id) {
   if (!spot) return;
 
   activeSpotId = id;
-  const entry = state.entries[id];
+  const entry = getEntryForSpot(id);
   dialogTitle.textContent = spot.title;
   dialogAddress.textContent = spot.address;
   clearSpotButton.hidden = !entry;
@@ -317,7 +323,7 @@ function getActiveSpot() {
 }
 
 function render() {
-  const completed = Object.keys(state.entries).length;
+  const completed = SPOTS.filter((spot) => getEntryForSpot(spot.id)).length;
   completedCount.textContent = String(completed);
   meterFill.style.width = `${Math.round((completed / SPOTS.length) * 100)}%`;
   resetCopy.textContent = `Auto-resets after the second Monday ends. Next reset: ${formatDate(getNextResetDate())}.`;
@@ -326,7 +332,7 @@ function render() {
     : "Saved on this device only until Supabase is configured.";
 
   SPOTS.forEach((spot, index) => {
-    const entry = state.entries[spot.id];
+    const entry = getEntryForSpot(spot.id);
     const marker = markers.get(spot.id);
     if (marker) {
       marker.setIcon(createMarkerIcon(spot, index));
@@ -336,13 +342,24 @@ function render() {
 
   document.querySelectorAll(".spot-item").forEach((button) => {
     const spot = SPOTS.find((item) => item.id === button.dataset.spotId);
-    const entry = state.entries[spot.id];
+    const entry = getEntryForSpot(spot.id);
     const subtitle = button.querySelector("small");
     button.classList.toggle("is-complete", Boolean(entry));
     subtitle.textContent = entry
       ? `${entry.name} - ${formatDate(entry.completedAt)}`
       : spot.address;
   });
+}
+
+function getEntryForSpot(spotId) {
+  const entry = state.entries[spotId];
+  if (!entry) return null;
+
+  if (entry.spotId && entry.spotId !== spotId) {
+    return null;
+  }
+
+  return entry;
 }
 
 function refreshMapLayout() {
@@ -369,6 +386,11 @@ async function initializeApp() {
   }
 }
 
+async function refreshEntriesFromBackend() {
+  if (!supabaseClient) return;
+  state.entries = await loadEntries();
+}
+
 function createSupabaseClient() {
   const hasConfig = backendConfig.supabaseUrl && backendConfig.supabaseAnonKey;
   if (!hasConfig || !window.supabase) return null;
@@ -392,7 +414,10 @@ async function loadEntries() {
   if (error) throw error;
 
   return (data || []).reduce((entries, row) => {
+    if (!spotIds.has(row.spot_id)) return entries;
+
     entries[row.spot_id] = {
+      spotId: row.spot_id,
       name: row.name,
       description: row.description,
       image: row.image_url,
@@ -407,6 +432,7 @@ async function saveEntry(spot, entry) {
   if (!supabaseClient) {
     const image = entry.file ? await resizeImage(entry.file) : entry.existing.image;
     state.entries[spot.id] = {
+      spotId: spot.id,
       name: entry.name,
       description: entry.description,
       image,
@@ -442,6 +468,7 @@ async function saveEntry(spot, entry) {
   if (error) throw error;
 
   state.entries[spot.id] = {
+    spotId: row.spot_id,
     name: row.name,
     description: row.description,
     image: row.image_url,
@@ -533,7 +560,7 @@ function getBucketName() {
 }
 
 function createMarkerIcon(spot, index) {
-  const complete = Boolean(state.entries[spot.id]);
+  const complete = Boolean(getEntryForSpot(spot.id));
   return L.divIcon({
     className: "",
     html: `<span class="marker-pin ${complete ? "is-complete" : ""}">${complete ? "&#10003;" : index + 1}</span>`,
@@ -566,7 +593,7 @@ function loadLocalState() {
     if (!saved || saved.cycleKey !== cycleKey) return fallback;
     return {
       cycleKey,
-      entries: saved.entries || {}
+      entries: normalizeEntries(saved.entries || {})
     };
   } catch {
     return fallback;
@@ -574,7 +601,22 @@ function loadLocalState() {
 }
 
 function saveLocalState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    cycleKey: state.cycleKey,
+    entries: normalizeEntries(state.entries)
+  }));
+}
+
+function normalizeEntries(entries) {
+  return Object.entries(entries).reduce((cleanEntries, [spotId, entry]) => {
+    if (!spotIds.has(spotId) || !entry) return cleanEntries;
+
+    cleanEntries[spotId] = {
+      ...entry,
+      spotId
+    };
+    return cleanEntries;
+  }, {});
 }
 
 function getCycleKey(date) {
