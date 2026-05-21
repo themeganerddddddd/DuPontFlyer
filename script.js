@@ -93,12 +93,33 @@ const state = {
 const markers = new Map();
 let activeSpotId = null;
 
-const MAP_BOUNDS = {
-  west: -77.0472,
-  south: 38.9069,
-  east: -77.0338,
-  north: 38.9164
-};
+const map = L.map("map", {
+  zoomControl: false,
+  preferCanvas: true
+}).setView([38.91095, -77.04055], 16);
+
+L.control.zoom({
+  position: "bottomright"
+}).addTo(map);
+
+const mapStatus = L.DomUtil.create("div", "map-status");
+mapStatus.textContent = "Loading Dupont Circle map...";
+document.querySelector("#map").append(mapStatus);
+
+const tileLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  maxZoom: 20,
+  subdomains: ["a", "b", "c", "d"]
+}).addTo(map);
+
+tileLayer.once("load", () => {
+  mapStatus.hidden = true;
+});
+
+tileLayer.on("tileerror", () => {
+  mapStatus.hidden = false;
+  mapStatus.textContent = "Map tiles are still loading. Markers are locked to the address coordinates.";
+});
 
 const spotList = document.querySelector("#spot-list");
 const completedCount = document.querySelector("#completed-count");
@@ -124,19 +145,17 @@ const manualResetButton = document.querySelector("#manual-reset");
 const exportButton = document.querySelector("#export-data");
 const importInput = document.querySelector("#import-data");
 const template = document.querySelector("#spot-item-template");
-const mapElement = document.querySelector("#map");
-const markerLayer = createMapView();
 
 SPOTS.forEach((spot, index) => {
-  const marker = document.createElement("button");
-  marker.type = "button";
-  marker.className = "marker-pin";
-  marker.style.left = `${getMarkerPosition(spot).x}%`;
-  marker.style.top = `${getMarkerPosition(spot).y}%`;
-  marker.dataset.label = spot.title;
-  marker.setAttribute("aria-label", `Open ${spot.title}`);
-  marker.addEventListener("click", () => openSpot(spot.id));
-  markerLayer.append(marker);
+  const marker = L.marker([spot.lat, spot.lng], {
+    icon: createMarkerIcon(spot, index)
+  }).addTo(map);
+
+  marker.bindTooltip(spot.title, {
+    direction: "bottom",
+    offset: [0, 18]
+  });
+  marker.on("click", () => openSpot(spot.id));
   markers.set(spot.id, marker);
 
   const node = template.content.cloneNode(true);
@@ -148,13 +167,19 @@ SPOTS.forEach((spot, index) => {
   button.dataset.spotId = spot.id;
   button.addEventListener("click", () => {
     openSpot(spot.id);
-    marker.focus({ preventScroll: true });
+    map.flyTo([spot.lat, spot.lng], 18, { duration: 0.45 });
   });
   status.dataset.number = String(index + 1);
   title.textContent = spot.title;
   subtitle.textContent = spot.address;
   spotList.append(node);
 });
+
+const bounds = L.latLngBounds(SPOTS.map((spot) => [spot.lat, spot.lng]));
+map.fitBounds(bounds.pad(0.18));
+refreshMapSize();
+window.addEventListener("resize", refreshMapSize);
+window.addEventListener("orientationchange", refreshMapSize);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -306,11 +331,10 @@ function render() {
     const entry = getEntryForSpot(spot.id);
     const marker = markers.get(spot.id);
     if (marker) {
-      marker.classList.toggle("is-complete", Boolean(entry));
-      marker.textContent = entry ? "\u2713" : String(index + 1);
-      marker.title = entry
+      marker.setIcon(createMarkerIcon(spot, index));
+      marker.setTooltipContent(entry
         ? `${spot.title} - marked by ${entry.name}`
-        : spot.title;
+        : spot.title);
     }
   });
 
@@ -336,53 +360,26 @@ function getEntryForSpot(spotId) {
   return entry;
 }
 
-function createMapView() {
-  const iframe = document.createElement("iframe");
-  const markerLayerElement = document.createElement("div");
-  const fallbackLabel = document.createElement("div");
-  const bbox = `${MAP_BOUNDS.west},${MAP_BOUNDS.south},${MAP_BOUNDS.east},${MAP_BOUNDS.north}`;
+function createMarkerIcon(spot, index) {
+  const complete = Boolean(getEntryForSpot(spot.id));
 
-  fallbackLabel.className = "map-fallback-label";
-  fallbackLabel.textContent = "Dupont Circle priority map";
-
-  iframe.className = "map-frame";
-  iframe.title = "OpenStreetMap view of Dupont Circle";
-  iframe.loading = "eager";
-  iframe.referrerPolicy = "no-referrer-when-downgrade";
-  iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik`;
-
-  markerLayerElement.className = "marker-layer";
-  mapElement.append(fallbackLabel, iframe, markerLayerElement);
-  return markerLayerElement;
+  return L.divIcon({
+    className: "",
+    html: `<span class="marker-pin ${complete ? "is-complete" : ""}" data-label="${escapeHtml(spot.title)}">${complete ? "&#10003;" : index + 1}</span>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -18]
+  });
 }
 
-function getMarkerPosition(spot) {
-  // Marker placement is derived from each spot's address coordinates.
-  // The embedded OpenStreetMap bbox uses the same north/south/east/west bounds.
-  const west = longitudeToWorldX(MAP_BOUNDS.west);
-  const east = longitudeToWorldX(MAP_BOUNDS.east);
-  const north = latitudeToWorldY(MAP_BOUNDS.north);
-  const south = latitudeToWorldY(MAP_BOUNDS.south);
-  const x = ((longitudeToWorldX(spot.lng) - west) / (east - west)) * 100;
-  const y = ((latitudeToWorldY(spot.lat) - north) / (south - north)) * 100;
+function refreshMapSize() {
+  requestAnimationFrame(() => {
+    map.invalidateSize();
+  });
 
-  return {
-    x: clamp(x, 3, 97),
-    y: clamp(y, 3, 97)
-  };
-}
-
-function longitudeToWorldX(longitude) {
-  return (longitude + 180) / 360;
-}
-
-function latitudeToWorldY(latitude) {
-  const radians = latitude * Math.PI / 180;
-  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
+  window.setTimeout(() => {
+    map.invalidateSize();
+  }, 250);
 }
 
 async function initializeApp() {
