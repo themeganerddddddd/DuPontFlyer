@@ -93,32 +93,11 @@ const state = {
 const markers = new Map();
 let activeSpotId = null;
 
-const map = L.map("map", {
-  zoomControl: false,
-  preferCanvas: true
-}).setView([38.91095, -77.04055], 16);
-
-L.control.zoom({
-  position: "bottomright"
-}).addTo(map);
-
-const mapStatus = L.DomUtil.create("div", "map-status");
-mapStatus.textContent = "Loading Dupont Circle map...";
-document.querySelector("#map").append(mapStatus);
-
-const tileLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-  maxZoom: 20,
-  subdomains: ["a", "b", "c", "d"]
-}).addTo(map);
-
-tileLayer.once("load", () => {
-  mapStatus.hidden = true;
-});
-
-tileLayer.on("tileerror", () => {
-  mapStatus.hidden = false;
-  mapStatus.textContent = "Map tiles are still loading. Markers are locked to the address coordinates.";
+const map = createCoordinateMap(document.querySelector("#map"), {
+  center: { lat: 38.91095, lng: -77.04055 },
+  zoom: 16,
+  minZoom: 15,
+  maxZoom: 19
 });
 
 const spotList = document.querySelector("#spot-list");
@@ -147,15 +126,9 @@ const importInput = document.querySelector("#import-data");
 const template = document.querySelector("#spot-item-template");
 
 SPOTS.forEach((spot, index) => {
-  const marker = L.marker([spot.lat, spot.lng], {
-    icon: createMarkerIcon(spot, index)
-  }).addTo(map);
-
-  marker.bindTooltip(spot.title, {
-    direction: "bottom",
-    offset: [0, 18]
-  });
-  marker.on("click", () => openSpot(spot.id));
+  const marker = createMarkerElement(spot, index);
+  marker.addEventListener("click", () => openSpot(spot.id));
+  map.addMarker(marker, spot);
   markers.set(spot.id, marker);
 
   const node = template.content.cloneNode(true);
@@ -167,7 +140,7 @@ SPOTS.forEach((spot, index) => {
   button.dataset.spotId = spot.id;
   button.addEventListener("click", () => {
     openSpot(spot.id);
-    map.flyTo([spot.lat, spot.lng], 18, { duration: 0.45 });
+    map.setView({ lat: spot.lat, lng: spot.lng }, 18);
   });
   status.dataset.number = String(index + 1);
   title.textContent = spot.title;
@@ -175,11 +148,9 @@ SPOTS.forEach((spot, index) => {
   spotList.append(node);
 });
 
-const bounds = L.latLngBounds(SPOTS.map((spot) => [spot.lat, spot.lng]));
-map.fitBounds(bounds.pad(0.18));
-refreshMapSize();
-window.addEventListener("resize", refreshMapSize);
-window.addEventListener("orientationchange", refreshMapSize);
+map.fitSpots(SPOTS);
+window.addEventListener("resize", () => map.render());
+window.addEventListener("orientationchange", () => window.setTimeout(() => map.render(), 150));
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -331,10 +302,10 @@ function render() {
     const entry = getEntryForSpot(spot.id);
     const marker = markers.get(spot.id);
     if (marker) {
-      marker.setIcon(createMarkerIcon(spot, index));
-      marker.setTooltipContent(entry
+      updateMarkerElement(marker, spot, index, entry);
+      marker.title = entry
         ? `${spot.title} - marked by ${entry.name}`
-        : spot.title);
+        : spot.title;
     }
   });
 
@@ -360,26 +331,177 @@ function getEntryForSpot(spotId) {
   return entry;
 }
 
-function createMarkerIcon(spot, index) {
-  const complete = Boolean(getEntryForSpot(spot.id));
+function createCoordinateMap(container, options) {
+  const tileSize = 256;
+  const tilePane = document.createElement("div");
+  const markerLayer = document.createElement("div");
+  const controls = document.createElement("div");
+  const status = document.createElement("div");
+  const attribution = document.createElement("div");
+  const markersOnMap = [];
+  let center = { ...options.center };
+  let zoom = options.zoom;
+  let isDragging = false;
+  let dragStart = null;
 
-  return L.divIcon({
-    className: "",
-    html: `<span class="marker-pin ${complete ? "is-complete" : ""}" data-label="${escapeHtml(spot.title)}">${complete ? "&#10003;" : index + 1}</span>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -18]
+  tilePane.className = "tile-pane";
+  markerLayer.className = "map-marker-layer";
+  controls.className = "map-controls";
+  status.className = "map-status";
+  attribution.className = "map-attribution";
+  status.textContent = "Drag or zoom the map. Markers stay locked to address coordinates.";
+  attribution.innerHTML = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+  const zoomIn = document.createElement("button");
+  const zoomOut = document.createElement("button");
+  zoomIn.type = "button";
+  zoomOut.type = "button";
+  zoomIn.textContent = "+";
+  zoomOut.textContent = "-";
+  zoomIn.setAttribute("aria-label", "Zoom in");
+  zoomOut.setAttribute("aria-label", "Zoom out");
+  controls.append(zoomIn, zoomOut);
+  container.append(tilePane, markerLayer, controls, status, attribution);
+
+  zoomIn.addEventListener("click", () => setView(center, zoom + 1));
+  zoomOut.addEventListener("click", () => setView(center, zoom - 1));
+
+  container.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) return;
+    isDragging = true;
+    dragStart = {
+      x: event.clientX,
+      y: event.clientY,
+      centerPixel: latLngToPixel(center.lat, center.lng, zoom)
+    };
+    container.setPointerCapture(event.pointerId);
   });
+
+  container.addEventListener("pointermove", (event) => {
+    if (!isDragging || !dragStart) return;
+    const nextCenterPixel = {
+      x: dragStart.centerPixel.x - (event.clientX - dragStart.x),
+      y: dragStart.centerPixel.y - (event.clientY - dragStart.y)
+    };
+    center = pixelToLatLng(nextCenterPixel.x, nextCenterPixel.y, zoom);
+    render();
+  });
+
+  container.addEventListener("pointerup", (event) => {
+    isDragging = false;
+    dragStart = null;
+    if (container.hasPointerCapture(event.pointerId)) {
+      container.releasePointerCapture(event.pointerId);
+    }
+  });
+
+  container.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    setView(center, zoom + (event.deltaY < 0 ? 1 : -1));
+  }, { passive: false });
+
+  function addMarker(element, spot) {
+    markerLayer.append(element);
+    markersOnMap.push({ element, spot });
+    render();
+  }
+
+  function setView(nextCenter, nextZoom = zoom) {
+    center = { ...nextCenter };
+    zoom = Math.max(options.minZoom, Math.min(options.maxZoom, nextZoom));
+    render();
+  }
+
+  function fitSpots(spots) {
+    const average = spots.reduce((sum, spot) => ({
+      lat: sum.lat + spot.lat,
+      lng: sum.lng + spot.lng
+    }), { lat: 0, lng: 0 });
+    setView({
+      lat: average.lat / spots.length,
+      lng: average.lng / spots.length
+    }, options.zoom);
+  }
+
+  function render() {
+    const width = Math.max(container.clientWidth, 1);
+    const height = Math.max(container.clientHeight, 1);
+    const centerPixel = latLngToPixel(center.lat, center.lng, zoom);
+    const startX = Math.floor((centerPixel.x - width / 2) / tileSize);
+    const endX = Math.floor((centerPixel.x + width / 2) / tileSize);
+    const startY = Math.floor((centerPixel.y - height / 2) / tileSize);
+    const endY = Math.floor((centerPixel.y + height / 2) / tileSize);
+    const fragment = document.createDocumentFragment();
+    const maxTile = 2 ** zoom;
+
+    for (let x = startX; x <= endX; x += 1) {
+      for (let y = startY; y <= endY; y += 1) {
+        if (y < 0 || y >= maxTile) continue;
+        const wrappedX = ((x % maxTile) + maxTile) % maxTile;
+        const tile = document.createElement("img");
+        tile.className = "map-tile";
+        tile.alt = "";
+        tile.decoding = "async";
+        tile.draggable = false;
+        tile.src = `https://a.basemaps.cartocdn.com/light_all/${zoom}/${wrappedX}/${y}.png`;
+        tile.onload = () => {
+          status.hidden = true;
+        };
+        tile.onerror = () => {
+          tile.onerror = null;
+          tile.src = `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${y}.png`;
+          status.hidden = false;
+          status.textContent = "Map tiles are loading. Markers are still locked to the address coordinates.";
+        };
+        tile.style.left = `${x * tileSize - centerPixel.x + width / 2}px`;
+        tile.style.top = `${y * tileSize - centerPixel.y + height / 2}px`;
+        fragment.append(tile);
+      }
+    }
+
+    tilePane.replaceChildren(fragment);
+
+    markersOnMap.forEach(({ element, spot }) => {
+      const pixel = latLngToPixel(spot.lat, spot.lng, zoom);
+      element.style.left = `${pixel.x - centerPixel.x + width / 2}px`;
+      element.style.top = `${pixel.y - centerPixel.y + height / 2}px`;
+    });
+  }
+
+  return { addMarker, fitSpots, render, setView };
 }
 
-function refreshMapSize() {
-  requestAnimationFrame(() => {
-    map.invalidateSize();
-  });
+function latLngToPixel(lat, lng, zoom) {
+  const scale = 256 * 2 ** zoom;
+  const sinLat = Math.sin(lat * Math.PI / 180);
+  return {
+    x: (lng + 180) / 360 * scale,
+    y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale
+  };
+}
 
-  window.setTimeout(() => {
-    map.invalidateSize();
-  }, 250);
+function pixelToLatLng(x, y, zoom) {
+  const scale = 256 * 2 ** zoom;
+  const lng = x / scale * 360 - 180;
+  const n = Math.PI - 2 * Math.PI * y / scale;
+  const lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  return { lat, lng };
+}
+
+function createMarkerElement(spot, index) {
+  const marker = document.createElement("button");
+  marker.type = "button";
+  marker.className = "marker-pin";
+  marker.dataset.label = spot.title;
+  marker.setAttribute("aria-label", `Open ${spot.title}`);
+  updateMarkerElement(marker, spot, index, getEntryForSpot(spot.id));
+  return marker;
+}
+
+function updateMarkerElement(marker, spot, index, entry) {
+  marker.classList.toggle("is-complete", Boolean(entry));
+  marker.dataset.label = entry ? `${spot.title} - ${entry.name}` : spot.title;
+  marker.textContent = entry ? "\u2713" : String(index + 1);
 }
 
 async function initializeApp() {

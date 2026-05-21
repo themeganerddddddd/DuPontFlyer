@@ -92,6 +92,52 @@ button:hover,
   z-index: 500;
 }
 
+.tile-pane,
+.map-marker-layer {
+  inset: 0;
+  overflow: hidden;
+  position: absolute;
+}
+
+.tile-pane {
+  z-index: 1;
+}
+
+.map-tile {
+  height: 256px;
+  position: absolute;
+  width: 256px;
+}
+
+.map-marker-layer {
+  pointer-events: none;
+  z-index: 3;
+}
+
+.map-controls {
+  bottom: 18px;
+  display: grid;
+  gap: 6px;
+  position: absolute;
+  right: 18px;
+  z-index: 4;
+}
+
+.map-controls button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 5px 12px rgba(23, 33, 29, 0.16);
+  color: var(--ink);
+  display: flex;
+  font-size: 1.2rem;
+  height: 38px;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0;
+  width: 38px;
+}
+
 .side-panel {
   background: var(--panel);
   border-left: 1px solid var(--line);
@@ -297,7 +343,9 @@ h2 {
   height: 34px;
   justify-content: center;
   line-height: 1;
-  position: relative;
+  pointer-events: auto;
+  position: absolute;
+  transform: translate(-50%, -50%);
   width: 34px;
 }
 
@@ -333,12 +381,19 @@ h2 {
   opacity: 1;
 }
 
-.leaflet-container {
-  font: inherit;
+.map-attribution {
+  background: rgba(255, 255, 255, 0.88);
+  bottom: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  padding: 3px 6px;
+  position: absolute;
+  right: 0;
+  z-index: 4;
 }
 
-.leaflet-control-attribution {
-  font-size: 0.68rem;
+.map-attribution a {
+  color: inherit;
 }
 
 .popup-copy {
